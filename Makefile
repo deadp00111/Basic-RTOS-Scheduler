@@ -1,107 +1,58 @@
-##############################################################################
-# RTOS Industrial Data Logger - STM32F411CEU6 - arm-none-eabi-gcc + make
-##############################################################################
 
-TARGET     = rtos_logger
+
+TARGET     = scheduler
 BUILD_DIR  = build
 
-PREFIX     = arm-none-eabi-
-CC         = $(PREFIX)gcc
-AS         = $(PREFIX)gcc -x assembler-with-cpp
-OBJCOPY    = $(PREFIX)objcopy
-SIZE       = $(PREFIX)size
-GDB        = $(PREFIX)gdb
+CC_ARM     = arm-none-eabi-gcc
+OBJCOPY    = arm-none-eabi-objcopy
+SIZE       = arm-none-eabi-size
 
-MCU_FLAGS  = -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
+ARM_ASM    = startup/startup.s
+LDSCRIPT   = startup/stm32f411.ld
 
-# ---- Sources ---------------------------------------------------------------
-C_SOURCES = \
-  Core/Src/main.c \
-  Core/Src/stm32f4xx_it.c \
-  Core/Src/bsp_uart.c \
-  Core/Src/bsp_i2c.c \
-  Core/Src/bsp_spi_sd.c \
-  Core/Src/ssd1306.c \
-  Core/Src/sensor_task.c \
-  Core/Src/logger_task.c \
-  Core/Src/display_task.c \
-  Core/Src/cli_task.c \
-  Core/Src/monitor_task.c \
-  Drivers/CMSIS/Device/ST/STM32F4xx/Source/Templates/system_stm32f4xx.c \
-  Middlewares/FreeRTOS/tasks.c \
-  Middlewares/FreeRTOS/queue.c \
-  Middlewares/FreeRTOS/list.c \
-  Middlewares/FreeRTOS/timers.c \
-  Middlewares/FreeRTOS/event_groups.c \
-  Middlewares/FreeRTOS/stream_buffer.c \
-  Middlewares/FreeRTOS/portable/GCC/ARM_CM4F/port.c \
-  Middlewares/FreeRTOS/portable/MemMang/heap_4.c
+ARM_CFLAGS = -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
+             -Iinc -Wall -O2 -ffunction-sections -fdata-sections \
+             -fno-common -std=gnu11
 
-ASM_SOURCES = \
-  Drivers/CMSIS/Device/ST/STM32F4xx/Source/Templates/gcc/startup_stm32f411xe.s
+ARM_LDFLAGS = -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard \
+              -T$(LDSCRIPT) -Wl,--gc-sections -Wl,-Map=$(BUILD_DIR)/$(TARGET).map \
+              --specs=nano.specs --specs=nosys.specs
 
-# ---- Includes ---------------------------------------------------------------
-C_INCLUDES = \
-  -ICore/Inc \
-  -IDrivers/CMSIS/Include \
-  -IDrivers/CMSIS/Device/ST/STM32F4xx/Include \
-  -IMiddlewares/FreeRTOS/include \
-  -IMiddlewares/FreeRTOS/portable/GCC/ARM_CM4F
+ARM_OBJS = $(BUILD_DIR)/startup.o \
+           $(BUILD_DIR)/scheduler.o \
+           $(BUILD_DIR)/main.o
 
-C_DEFS = -DSTM32F411xE
+$(BUILD_DIR)/startup.o: $(ARM_ASM)
+	mkdir -p $(BUILD_DIR)
+	$(CC_ARM) $(ARM_CFLAGS) -c $< -o $@
 
-# ---- Flags -------------------------------------------------------------------
-CFLAGS  = $(MCU_FLAGS) $(C_DEFS) $(C_INCLUDES) -Wall -Wextra -O2 -g3 \
-          -ffunction-sections -fdata-sections -fno-common -fstack-usage \
-          -std=gnu11 -MMD -MP
+$(BUILD_DIR)/scheduler.o: src/scheduler.c
+	mkdir -p $(BUILD_DIR)
+	$(CC_ARM) $(ARM_CFLAGS) -c $< -o $@
 
-ASFLAGS = $(MCU_FLAGS) -g3
+$(BUILD_DIR)/main.o: src/main.c
+	mkdir -p $(BUILD_DIR)
+	$(CC_ARM) $(ARM_CFLAGS) -c $< -o $@
 
-LDSCRIPT = STM32F411CEU6_FLASH.ld
-LDFLAGS  = $(MCU_FLAGS) -specs=nano.specs -specs=nosys.specs \
-           -T$(LDSCRIPT) -Wl,-Map=$(BUILD_DIR)/$(TARGET).map,--cref \
-           -Wl,--gc-sections -static \
-           -Wl,--start-group -lc -lm -Wl,--end-group
+$(BUILD_DIR)/$(TARGET).elf: $(ARM_OBJS)
+	$(CC_ARM) $(ARM_LDFLAGS) $(ARM_OBJS) -o $@
+	$(SIZE) $@
 
-# ---- Object lists -------------------------------------------------------------
-OBJECTS  = $(addprefix $(BUILD_DIR)/,$(notdir $(C_SOURCES:.c=.o)))
-OBJECTS += $(addprefix $(BUILD_DIR)/,$(notdir $(ASM_SOURCES:.s=.o)))
-vpath %.c $(sort $(dir $(C_SOURCES)))
-vpath %.s $(sort $(dir $(ASM_SOURCES)))
+$(BUILD_DIR)/$(TARGET).bin: $(BUILD_DIR)/$(TARGET).elf
+	$(OBJCOPY) -O binary $< $@
 
-# ---- Rules ---------------------------------------------------------------------
-all: $(BUILD_DIR)/$(TARGET).elf $(BUILD_DIR)/$(TARGET).hex $(BUILD_DIR)/$(TARGET).bin
-	$(SIZE) $(BUILD_DIR)/$(TARGET).elf
-
-$(BUILD_DIR)/%.o: %.c Makefile | $(BUILD_DIR)
-	$(CC) -c $(CFLAGS) $< -o $@
-
-$(BUILD_DIR)/%.o: %.s Makefile | $(BUILD_DIR)
-	$(AS) -c $(ASFLAGS) $< -o $@
-
-$(BUILD_DIR)/$(TARGET).elf: $(OBJECTS) $(LDSCRIPT)
-	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf
+$(BUILD_DIR)/$(TARGET).hex: $(BUILD_DIR)/$(TARGET).elf
 	$(OBJCOPY) -O ihex $< $@
 
-$(BUILD_DIR)/%.bin: $(BUILD_DIR)/%.elf
-	$(OBJCOPY) -O binary -S $< $@
-
-$(BUILD_DIR):
-	mkdir -p $@
-
-# ---- Flash / debug helpers (adjust to whatever probe you actually have) ------
-flash: $(BUILD_DIR)/$(TARGET).bin
-	st-flash write $< 0x8000000
-
-flash-openocd: $(BUILD_DIR)/$(TARGET).elf
-	openocd -f interface/stlink.cfg -f target/stm32f4x.cfg \
-	  -c "program $< verify reset exit"
+flash: $(BUILD_DIR)/$(TARGET).bin $(BUILD_DIR)/$(TARGET).hex
+	@echo ""
+	@echo "Built $(BUILD_DIR)/$(TARGET).bin and .hex -- ready to flash."
+	@echo "Put the board in DFU mode (hold BOOT0, tap RESET, release BOOT0), then:"
+	@echo "  dfu-util -a 0 -s 0x08000000:leave -D $(BUILD_DIR)/$(TARGET).bin"
+	@echo "Or, if using an ST-Link probe instead of DFU:"
+	@echo "  st-flash write $(BUILD_DIR)/$(TARGET).bin 0x8000000"
 
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all clean flash flash-openocd
-
--include $(wildcard $(BUILD_DIR)/*.d)
+.PHONY: flash clean
